@@ -87,9 +87,12 @@ STRUCTURED_OUTPUT_RESCUES = int(os.environ.get("STRUCTURED_OUTPUT_RESCUES", "1")
 # Ollama 本地推理后端
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:14b")
-OLLAMA_TEMPERATURE = float(os.environ.get("OLLAMA_TEMPERATURE", "0.25"))
+OLLAMA_TEMPERATURE = float(os.environ.get("OLLAMA_TEMPERATURE", "0.25"))  # 默认用于 Tier2
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "8192"))
 OLLAMA_REPEAT_PENALTY = float(os.environ.get("OLLAMA_REPEAT_PENALTY", "1.15"))
+# Tier 专属温度（9B 小模型建议分开设置）
+OLLAMA_TIER2_TEMPERATURE = float(os.environ.get("OLLAMA_TIER2_TEMPERATURE", "0.2"))
+OLLAMA_TIER3_TEMPERATURE = float(os.environ.get("OLLAMA_TIER3_TEMPERATURE", "0.35"))
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "glm").lower()  # "glm" | "ollama"
 
 ROUND1_BOOKS = [
@@ -1645,17 +1648,31 @@ def build_json_rescue_prompt(prompt: str) -> str:
     )
 
 
-def call_structured_items(prompt: str, *, max_tokens: int = 3000) -> Dict[str, Any]:
+def call_structured_items(prompt: str, *, max_tokens: int = 3000, temperature: Optional[float] = None) -> Dict[str, Any]:
+    """调用结构化输出，temperature 为 None 时使用后端默认温度"""
     attempts: List[Dict[str, Any]] = []
     last_error = "API 返回为空"
     last_raw_result: Optional[str] = None
     last_parsed = {"items": [], "parse_mode": "empty"}
 
+    # 确定基础温度（temperature 为 None 时使用后端默认值）
+    if temperature is None:
+        if LLM_BACKEND == "ollama":
+            temperature = OLLAMA_TEMPERATURE
+        else:
+            temperature = GLM_TEMPERATURE
+
     total_attempts = 1 + max(0, STRUCTURED_OUTPUT_RESCUES)
     for attempt in range(total_attempts):
         use_rescue = attempt > 0
         current_prompt = build_json_rescue_prompt(prompt) if use_rescue else prompt
-        current_temperature = GLM_RESCUE_TEMPERATURE if use_rescue else GLM_TEMPERATURE
+        # Rescue 模式使用稍高温度（给模型更多空间修正）
+        if LLM_BACKEND == "ollama":
+            rescue_temp = temperature  # Ollama 不区分 rescue 温度
+        else:
+            rescue_temp = GLM_RESCUE_TEMPERATURE
+        current_temperature = rescue_temp if use_rescue else temperature
+        current_temperature = rescue_temp if use_rescue else base_temp
         raw_result = call_glm_api(current_prompt, max_tokens=max_tokens, temperature=current_temperature)
         parsed = safe_parse_response(raw_result or "")
         raw_items = parsed.get("items") or []
@@ -1700,9 +1717,11 @@ def call_structured_items(prompt: str, *, max_tokens: int = 3000) -> Dict[str, A
 def _process_tier2_chapter(book_name, genre, chapter_num, chapter_title, content, chapter_stats, raw_dir, invalid_dir):
     """处理单个章节的 Tier2 提取（可并发调用），失败自动重试"""
     prompt = build_tier2_prompt(book_name, chapter_num, chapter_title, content, chapter_stats)
+    # Tier2 温度：一致性优先，较低温度
+    tier2_temp = OLLAMA_TIER2_TEMPERATURE if LLM_BACKEND == "ollama" else GLM_TEMPERATURE
     last_error = ""
     for attempt in range(MAX_CHAPTER_RETRIES + 1):
-        result = call_structured_items(prompt, max_tokens=3000)
+        result = call_structured_items(prompt, max_tokens=3000, temperature=tier2_temp)
         raw_result = result["raw_result"]
         dump_json(
             raw_dir / f"chapter_{chapter_num:04d}.json",
@@ -1867,6 +1886,9 @@ def tier3_distill(
     if not tier2_items:
         return []
 
+    # Tier3 温度：需要一点创造性，稍高温度
+    tier3_temp = OLLAMA_TIER3_TEMPERATURE if LLM_BACKEND == "ollama" else GLM_TEMPERATURE
+
     raw_dir = ensure_dir(tier3_dir / "raw_responses")
     invalid_dir = ensure_dir(tier3_dir / "invalid_responses")
     by_warehouse: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -1878,7 +1900,7 @@ def tier3_distill(
     for idx, (warehouse, warehouse_items) in enumerate(warehouse_list, start=1):
         print(f"      处理 {warehouse} ({len(warehouse_items)}条) ({idx}/{len(warehouse_list)})...")
         prompt = build_tier3_prompt(book_name, warehouse, warehouse_items)
-        result = call_structured_items(prompt, max_tokens=3000)
+        result = call_structured_items(prompt, max_tokens=3000, temperature=tier3_temp)
         raw_result = result["raw_result"]
         dump_json(
             raw_dir / f"{warehouse}.json",
