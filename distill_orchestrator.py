@@ -1092,6 +1092,20 @@ def read_book(book_path: Path) -> Optional[str]:
 
 def split_chapters_streaming(book_path: Path, max_chars: int = 0) -> List[ChapterRecord]:
     """流式分章：逐行读取，不一次性加载全文。max_chars=0 表示不限。"""
+    # epub 文件需要专用解析器，不能当文本文件读
+    if book_path.suffix.lower() == ".epub":
+        content = read_epub_book(book_path)
+        if content:
+            print(f"    EPUB 流式解析: {len(content)} chars")
+            chapters = split_chapters(content)
+            if chapters:
+                print(f"    分章完成: {len(chapters)} 章")
+                return chapters
+            # 有内容但分章为0，走普通文本路径尝试
+            print("    EPUB 解析成功但未检测到章节，尝试文本模式...")
+        else:
+            print("    EPUB 解析失败，尝试文本模式...")
+        # fall through to text-based streaming
     encodings = ["utf-8", "gb18030", "gbk", "gb2312", "big5", "utf-16", "cp936"]
     combined_pattern = re.compile("|".join(f"(?:{pattern})" for pattern in CHAPTER_PATTERNS), re.MULTILINE)
     chapters: List[ChapterRecord] = []
