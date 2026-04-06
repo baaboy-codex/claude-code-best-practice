@@ -1,0 +1,21 @@
+{
+  "_note": "Team-shared hook configuration",
+  "hooks": {
+    "PreToolUse": {
+      "enabled": true,
+      "sound": "pre-tool.wav"
+    },
+    "PostToolUse": {
+      "enabled": true,
+      "sound": "post-tool.wav"
+    },
+    "Stop": {
+      "enabled": true,
+      "sound": "stop.wav"
+    },
+    "SessionStart": {
+      "enabled": true,
+      "logContext": true
+    }
+  }
+}
