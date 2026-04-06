@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": ["mcp__*", "Read", "Write", "Edit", "Bash", "Glob", "Grep"],
+    "deny": []
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": ["context7", "playwright"]
+}
