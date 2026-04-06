@@ -97,6 +97,24 @@ ROUND1_BOOKS = [
     ("00-\u6d4b\u8bd5", "\u300a\u5343\u592b\u65a9\u300b(\u6821\u5bf9\u7248\u5168\u672c)\u4f5c\u8005_\u6674\u4e86_txt -- 64d1a6271cb9c7b4f5abcd94f23262a0 -- Anna\u2019s Archive.txt"),
 ]
 
+# HTTP 连接池（提升并发效率）
+_http_session: Optional[requests.Session] = None
+
+
+def _get_http_session() -> requests.Session:
+    """获取或创建 HTTP 会话（连接池复用）"""
+    global _http_session
+    if _http_session is None:
+        _http_session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=20,
+            pool_maxsize=20,
+            max_retries=0,  # 我们自己处理重试
+        )
+        _http_session.mount("http://", adapter)
+        _http_session.mount("https://", adapter)
+    return _http_session
+
 def scan_books_from_source(min_size_mb: float = 0) -> List[Tuple[str, str]]:
     """自动扫描源目录下所有 txt/epub 文件"""
     books = []
@@ -123,7 +141,20 @@ SCHEMA_VERSION = "knowledge-candidate-v4"
 TIER2_MAX_CHAPTERS = 40
 TIER2_SLEEP_SECONDS = 0
 TIER3_SLEEP_SECONDS = 0
-TIER2_CONCURRENCY = int(os.environ.get("TIER2_CONCURRENCY", "1"))  # Tier2 并发数
+# Tier2 并发数：Ollama 本地推理延迟低，可设置更高并发
+_TIER2_CONCURRENCY_ENV = os.environ.get("TIER2_CONCURRENCY", "")
+if _TIER2_CONCURRENCY_ENV:
+    TIER2_CONCURRENCY = int(_TIER2_CONCURRENCY_ENV)
+else:
+    # 默认值：Ollama 8并发，GLM 3并发（API 有速率限制）
+    TIER2_CONCURRENCY = 8 if LLM_BACKEND == "ollama" else 3
+
+# Tier1 并发（章节分析）
+_TIER1_CONCURRENCY_ENV = os.environ.get("TIER1_CONCURRENCY", "")
+if _TIER1_CONCURRENCY_ENV:
+    TIER1_CONCURRENCY = int(_TIER1_CONCURRENCY_ENV)
+else:
+    TIER1_CONCURRENCY = 4 if LLM_BACKEND == "ollama" else 2
 
 
 # ============================================================================
@@ -812,7 +843,8 @@ def _extract_glm_text(result: Dict[str, Any]) -> str:
 
 def _sleep_before_retry(retry: int, *, base_seconds: int | None = None) -> None:
     base = GLM_RETRY_BACKOFF_SECONDS if base_seconds is None else base_seconds
-    time.sleep(base * (retry + 1))
+    # 指数退避：1s, 2s, 4s, 8s, 16s（最多等待 base * 2^retry）
+    time.sleep(base * min(2 ** retry, 16))
 
 
 def _call_glm_raw(prompt: str, *, max_tokens: int = 4000, temperature: Optional[float] = None) -> Optional[str]:
@@ -829,9 +861,10 @@ def _call_glm_raw(prompt: str, *, max_tokens: int = 4000, temperature: Optional[
         "max_tokens": max_tokens,
         "temperature": GLM_TEMPERATURE if temperature is None else temperature,
     }
+    session = _get_http_session()
     for retry in range(GLM_MAX_RETRIES):
         try:
-            response = requests.post(request_url, headers=headers, json=payload, timeout=(20, GLM_TIMEOUT))
+            response = session.post(request_url, headers=headers, json=payload, timeout=(20, GLM_TIMEOUT))
             if response.status_code == 200:
                 result = response.json()
                 return _extract_glm_text(result)
@@ -865,7 +898,8 @@ OLLAMA_HEALTH_INTERVAL = 60  # 每 60 秒检查一次健康状态
 def _check_ollama_health() -> bool:
     """检查 Ollama 服务和模型是否可用（服务在线 + 模型已注册）"""
     try:
-        r = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
+        session = _get_http_session()
+        r = session.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=10)
         if r.status_code != 200:
             print(f"      [WARN] Ollama 返回 {r.status_code}")
             return False
@@ -893,7 +927,7 @@ def _call_ollama_raw(prompt: str, *, max_tokens: int = 4000, temperature: Option
             import subprocess
             subprocess.run(["taskkill", "/F", "/IM", "ollama.exe"], capture_output=True, timeout=5)
             time.sleep(3)
-            subprocess.Popen(["ollama", "serve"], creationflags=0x08000000)
+            subprocess.Popen(["ollama", "serve"], creationflags=subprocess.CREATE_NO_WINDOW)
             time.sleep(8)
             if _check_ollama_health():
                 _ollama_healthy = True
@@ -912,9 +946,10 @@ def _call_ollama_raw(prompt: str, *, max_tokens: int = 4000, temperature: Option
         "num_ctx": OLLAMA_NUM_CTX,
         "repeat_penalty": OLLAMA_REPEAT_PENALTY,
     }
+    session = _get_http_session()
     for retry in range(3):
         try:
-            response = requests.post(url, json=payload, timeout=(10, 120))  # connect 10s, read 120s
+            response = session.post(url, json=payload, timeout=(10, 120))  # connect 10s, read 120s
             if response.status_code == 200:
                 result = response.json()
                 return result["message"]["content"]
@@ -923,15 +958,15 @@ def _call_ollama_raw(prompt: str, *, max_tokens: int = 4000, temperature: Option
                 print(f"      [FATAL] Model '{OLLAMA_MODEL}' not found, aborting retries.")
                 return None
         except requests.exceptions.ConnectionError:
-            print(f"      Ollama connection failed (retry {retry+1}/3), waiting 10s...")
-            time.sleep(10)
+            print(f"      Ollama connection failed (retry {retry+1}/3), waiting {2**retry}s...")
+            time.sleep(min(2 ** retry, 30))
         except requests.exceptions.Timeout:
-            print(f"      Ollama timeout (retry {retry+1}/3), waiting 10s...")
-            time.sleep(10)
+            print(f"      Ollama timeout (retry {retry+1}/3), waiting {2**retry}s...")
+            time.sleep(min(2 ** retry, 30))
         except Exception as exc:  # noqa: BLE001
             print(f"      Ollama error (retry {retry+1}/3): {exc}")
             if retry < 2:
-                time.sleep(3 * (retry + 1))
+                time.sleep(min(2 ** retry, 30))
     print(f"      Ollama failed after 3 retries")
     return None
 
