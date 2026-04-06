@@ -284,7 +284,7 @@ def run_distillation(skip_tier1=False, skip_tier2=False, resume=False, scan=Fals
         env.pop("OLLAMA_MODELS", None)
         env.pop("OLLAMA_NUM_CTX", None)
     env["CHAPTER_WORKERS"] = "1"
-    env["TIER2_CONCURRENCY"] = os.environ.get("TIER2_CONCURRENCY", "1")
+    env["TIER2_CONCURRENCY"] = os.environ.get("TIER2_CONCURRENCY", "15")  # 默认与主脚本一致
     env["THREE_TIER_SOURCE_BASE"] = os.environ.get("THREE_TIER_SOURCE_BASE", r"D:\03-AI相关\03-books(new)\99-知识库\02-小说书库-分类")
     env["THREE_TIER_OUTPUT_BASE"] = os.environ.get("THREE_TIER_OUTPUT_BASE", r"D:\03-AI相关\03-books(new)\99-知识库\04-蒸馏结果")
 
