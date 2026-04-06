@@ -897,11 +897,14 @@ def _call_glm_raw(prompt: str, *, max_tokens: int = 4000, temperature: Optional[
         "x-api-key": GLM_API_KEY,
         "Content-Type": "application/json",
     }
-    # P2优化：支持 system_prompt
+    # P2优化：GLM API不支持system role，将system prompt合并到user message
     messages = []
     if system_prompt:
-        messages.append({"role": "system", "content": system_prompt})
-    messages.append({"role": "user", "content": prompt})
+        # GLM不支持system role，改用user message承载
+        combined_content = f"{system_prompt}\n\n{prompt}"
+        messages.append({"role": "user", "content": combined_content})
+    else:
+        messages.append({"role": "user", "content": prompt})
     payload = {
         "model": str(GLM_MODEL).strip(),
         "messages": messages,
