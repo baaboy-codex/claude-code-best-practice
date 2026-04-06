@@ -159,8 +159,8 @@ _TIER2_CONCURRENCY_ENV = os.environ.get("TIER2_CONCURRENCY", "")
 if _TIER2_CONCURRENCY_ENV:
     TIER2_CONCURRENCY = int(_TIER2_CONCURRENCY_ENV)
 else:
-    # 默认值：Ollama 8并发，GLM 20并发（云端API吞吐量大）
-    TIER2_CONCURRENCY = 8 if LLM_BACKEND == "ollama" else 20
+    # 默认值：Ollama 8并发，GLM 15并发（云端API有速率限制）
+    TIER2_CONCURRENCY = 8 if LLM_BACKEND == "ollama" else 15
 
 # Tier1 并发（章节分析）
 _TIER1_CONCURRENCY_ENV = os.environ.get("TIER1_CONCURRENCY", "")
