@@ -38,8 +38,9 @@ OLLAMA_RESTART_INTERVAL = int(os.environ.get("DISTILL_OLLAMA_RESTART", "0"))
 BASE_DIR = Path(__file__).resolve().parent
 SCRIPT = BASE_DIR / "distill_orchestrator.py"
 WORK_DIR = BASE_DIR
-DEFAULT_SOURCE_BASE = r"D:\03-AI相关\03-books(new)\99-知识库\02-小说书库-分类"
-DEFAULT_OUTPUT_BASE = r"D:\03-AI相关\03-books(new)\99-知识库\04-蒸馏结果"
+# 通过环境变量 THREE_TIER_SOURCE_BASE 和 THREE_TIER_OUTPUT_BASE 配置
+DEFAULT_SOURCE_BASE = str(Path(__file__).resolve().parent.parent / "books")
+DEFAULT_OUTPUT_BASE = str(Path(__file__).resolve().parent.parent / "output")
 LLM_BACKEND = os.environ.get("LLM_BACKEND", "ollama").lower()
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 PROGRESS_DIR = Path(os.environ.get("THREE_TIER_OUTPUT_BASE", DEFAULT_OUTPUT_BASE))
@@ -380,12 +381,6 @@ _dashboard_state = {
 
 # 线程锁，保护 _dashboard_state 的并发访问
 _dashboard_lock = threading.Lock()
-
-
-def _update_dashboard():
-    """从主循环调用：更新全局状态，供 dashboard 线程读取"""
-    # processed_books 和 queue_preview 由 main loop 定期更新
-    pass
 
 
 class DashboardHandler(http.server.BaseHTTPRequestHandler):
